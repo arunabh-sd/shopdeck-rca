@@ -1,0 +1,12 @@
+{
+  "name": "shopdeck-rca",
+  "version": "1.0.0",
+  "description": "ShopDeck Seller Experience RCA Console",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
