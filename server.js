@@ -1,11 +1,19 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = process.env.PORT || 3001;
-const METABASE_URL = process.env.METABASE_URL || '';
+const METABASE_URL = (process.env.METABASE_URL || '').replace(/\/$/, '');
 const METABASE_API_KEY = process.env.METABASE_API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+
+console.log('Starting ShopDeck RCA server...');
+console.log('PORT:', PORT);
+console.log('METABASE_URL:', METABASE_URL || '(not set)');
+console.log('METABASE_API_KEY:', METABASE_API_KEY ? '(set)' : '(not set)');
+console.log('ANTHROPIC_API_KEY:', ANTHROPIC_API_KEY ? '(set)' : '(not set)');
 
 function corsHeaders() {
   return {
@@ -18,26 +26,32 @@ function corsHeaders() {
 
 function makeRequest(targetUrl, options, body) {
   return new Promise((resolve, reject) => {
-    const parsed = new url.URL(targetUrl);
-    const lib = parsed.protocol === 'https:' ? https : http;
-    const req = lib.request({
-      hostname: parsed.hostname,
-      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-      path: parsed.pathname + parsed.search,
-      method: options.method || 'GET',
-      headers: options.headers || {}
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve({ status: res.statusCode, body: data }));
-    });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
+    try {
+      const parsed = new url.URL(targetUrl);
+      const lib = parsed.protocol === 'https:' ? https : http;
+      const req = lib.request({
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + (parsed.search || ''),
+        method: options.method || 'GET',
+        headers: options.headers || {}
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      });
+      req.on('error', reject);
+      if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+      req.end();
+    } catch (e) {
+      reject(e);
+    }
   });
 }
 
 const server = http.createServer(async (req, res) => {
+  const parsed = url.parse(req.url, true);
+
   // CORS preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, corsHeaders());
@@ -45,16 +59,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const parsed = url.parse(req.url, true);
-
   // Health check
   if (parsed.pathname === '/health') {
     res.writeHead(200, corsHeaders());
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ ok: true, metabase: !!METABASE_URL, anthropic: !!ANTHROPIC_API_KEY }));
     return;
   }
 
-  // Metabase query: POST /api/metabase?questionId=42&sellerId=SD-123&sellerField=seller_id
+  // Metabase query
   if (parsed.pathname === '/api/metabase' && req.method === 'POST') {
     const { questionId, sellerId, sellerField } = parsed.query;
     if (!questionId || !sellerId) {
@@ -70,6 +82,7 @@ const server = http.createServer(async (req, res) => {
           value: sellerId
         }]
       });
+      console.log(`Fetching Metabase question ${questionId} for seller ${sellerId}`);
       const result = await makeRequest(
         `${METABASE_URL}/api/card/${questionId}/query`,
         {
@@ -81,22 +94,25 @@ const server = http.createServer(async (req, res) => {
         },
         body
       );
+      console.log(`Metabase response status: ${result.status}`);
       res.writeHead(result.status, corsHeaders());
       res.end(result.body);
     } catch (e) {
+      console.error('Metabase error:', e.message);
       res.writeHead(500, corsHeaders());
       res.end(JSON.stringify({ error: e.message }));
     }
     return;
   }
 
-  // Claude analysis: POST /api/analyse
+  // Claude analysis
   if (parsed.pathname === '/api/analyse' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', async () => {
       try {
         const payload = JSON.parse(body);
+        console.log('Sending request to Claude...');
         const result = await makeRequest(
           'https://api.anthropic.com/v1/messages',
           {
@@ -113,9 +129,14 @@ const server = http.createServer(async (req, res) => {
             messages: payload.messages
           })
         );
+        console.log(`Claude response status: ${result.status}`);
+        if (result.status !== 200) {
+          console.error('Claude error body:', result.body);
+        }
         res.writeHead(result.status, corsHeaders());
         res.end(result.body);
       } catch (e) {
+        console.error('Claude error:', e.message);
         res.writeHead(500, corsHeaders());
         res.end(JSON.stringify({ error: e.message }));
       }
@@ -123,10 +144,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Serve index.html for everything else
+  // Serve index.html
   if (req.method === 'GET') {
-    const fs = require('fs');
-    const filePath = __dirname + '/index.html';
+    const filePath = path.join(__dirname, 'index.html');
     if (fs.existsSync(filePath)) {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(fs.readFileSync(filePath));
@@ -141,6 +161,9 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`ShopDeck RCA server running on port ${PORT}`);
 });
+
+process.on('uncaughtException', (e) => console.error('Uncaught:', e.message));
+process.on('unhandledRejection', (e) => console.error('Unhandled:', e));
