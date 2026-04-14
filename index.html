@@ -286,6 +286,27 @@ body{font-family:var(--body);background:var(--bg);color:var(--ink);font-size:14p
     </div>
   </div>
 
+  <div class="settings-section">ADDITIONAL ANALYSIS POINTERS (add your own rules here)</div>
+  <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-bottom:10px;line-height:1.6;">
+    Add any extra rules or context you want Claude to apply on top of the base prompt. Plain English is fine. These get appended directly — you don't need to touch the core prompt.
+  </div>
+  <div class="settings-grid">
+    <div class="sfield sg-full">
+      <label>ADDITIONAL POINTERS (one per line, plain English)</label>
+      <textarea id="cfg-additional" placeholder="e.g. Flag any case where a seller's catalog had fewer than 5 live products at go-live&#10;e.g. If chat response gap exceeds 48 hours, treat it as critical not just high&#10;e.g. Any promise about festival sale performance should be flagged as a commitment violation" style="min-height:100px;"></textarea>
+    </div>
+  </div>
+
+  <div class="settings-section">CORE ANALYSIS PROMPT (advanced — edit with care)</div>
+  <div style="font-family:var(--mono);font-size:9px;color:var(--ink3);margin-bottom:10px;line-height:1.6;">
+    This is the full instruction sent to Claude. Use <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">{{SELLER_ID}}</code>, <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">{{SALES_CRITERIA}}</code>, <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">{{TS_CRITERIA}}</code>, <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">{{ESCALATION}}</code>, and <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">{{DATA}}</code> as placeholders — they will be replaced automatically at runtime. The JSON structure at the end must stay intact for the UI to render correctly.
+  </div>
+  <div class="settings-grid">
+    <div class="sfield sg-full">
+      <label>CORE PROMPT</label>
+      <textarea id="cfg-core-prompt" style="min-height:200px;font-size:10px;"></textarea>
+    </div>
+  </div>
   <button class="save-btn" onclick="saveSettings()">Save settings</button>
   <span class="saved-msg" id="saved-msg">Saved</span>
 </div>
@@ -493,12 +514,75 @@ A good troubleshoot session must be proportionate to the seller's loss situation
 Judge each troubleshoot entry: was the action taken proportionate to the loss situation that week? Flag as insufficient if action was trivial relative to losses.
 Minimum frequency: 1 troubleshoot per week while seller is active in Kickstarter program.`;
 
+const DEFAULT_CORE_PROMPT = `You are an internal RCA tool for ShopDeck, an e-commerce enablement platform. Analyse the complete seller journey data below for seller {{SELLER_ID}} and return ONLY valid JSON — no markdown, no backticks, no explanation outside the JSON.
+
+SALES POLICY:
+{{SALES_CRITERIA}}
+
+TROUBLESHOOT QUALITY CRITERIA:
+{{TS_CRITERIA}}
+
+TTS LIST CONTEXT: If seller appears in the TTS (Time To Serve) list, this means ShopDeck internally flagged them as likely to churn. Use this to explain timeline context — did support quality drop after TTS flagging? Was the seller ever informed or communicated with about their situation? This is NOT a seller failure, it is a ShopDeck process failure if not handled well.
+
+UNIVERSAL EXPERIENCE RULES (apply across all functions):
+1. DETAIL REQUIREMENT: For every failure, go beyond the headline. State exactly who did what, on which dates, how many times, and what the outcome was. Example: "Agent X missed calls on Jan 3, Jan 5, Jan 6 — no callback made — then closed ticket #123 on Jan 8 despite seller escalating about unresolved website quality issue." Vague summaries are not acceptable.
+2. AD ACCOUNT / MONEY ISSUES: If seller's ad account was suspended, flag the exact suspension date, amount of money stuck, whether seller requested refund, and whether resolution was provided within a reasonable timeframe. Inability to refund or resolve within the same week is a failure.
+3. RESPONSE TIME VIOLATIONS: Any gap of more than 24 hours without a reply to a seller message or a callback after a missed call is a violation of seller experience. Flag each instance with exact timestamps where available.
+4. TTS P&L MARKING: In the pnl_weeks array, mark on_tts as true for any week where the seller appeared on the TTS list.
+5. DATA-BACKED OUTPUT: Every claim in summary, failures, and timeline must be traceable to a specific data point — a call record, chat message, ticket number, date, or P&L figure. Do not make general statements. If you cannot cite a data point, do not include the claim.
+
+{{ADDITIONAL_POINTERS}}
+
+{{ESCALATION}}
+
+DATA:
+{{DATA}}
+
+Return exactly this JSON (no extra fields):
+{
+  "severity": "Critical|High|Medium|Low",
+  "summary": "3-4 sentence blunt summary — every sentence must reference a specific data point (date, name, ticket, amount)",
+  "total_failures": <number>,
+  "policy_violations": <number>,
+  "onboard_days": <number or null>,
+  "troubleshoots_done": <number>,
+  "tts_weeks": <number of weeks seller appeared on TTS list>,
+  "tts_context": "1-2 sentences on how TTS appearance relates to the timeline and whether it was communicated well",
+  "sales_score": <1-10>,
+  "sales_score_desc": "one line with specific data reference",
+  "onboard_score": <1-10>,
+  "onboard_score_desc": "one line with specific data reference",
+  "hits_score": <1-10>,
+  "hits_score_desc": "one line with specific data reference",
+  "snapshot": {
+    "demo_date": "date or null",
+    "recharge_date": "date or null",
+    "golive_date": "date or null",
+    "revenue_transfer_date": "date or null"
+  },
+  "pnl_weeks": [
+    {"week": "Week 1", "spend": "₹X", "orders": <n>, "p_percent": "X%", "on_tts": true/false}
+  ],
+  "timeline": [
+    {"label": "short label", "date": "date/week", "status": "ok|warn|fail", "points": [{"type": "good|warn|bad", "text": "specific what happened with dates and names"}]}
+  ],
+  "sales_failures": [{"severity": "high|medium|low", "title": "specific failure with who, what, when", "meta": "exact source: call date, agent name, ticket number"}],
+  "onboard_failures": [{"severity": "high|medium|low", "title": "specific failure with who, what, when", "meta": "exact source detail"}],
+  "hits_failures": [{"severity": "high|medium|low", "title": "specific failure with who, what, when", "meta": "exact source detail"}],
+  "agents": [{"name": "Name", "initials": "AB", "role": "SALES|ONBOARDING|KICKSTARTER", "interactions": <n>, "flags": [{"sev": "high|medium", "text": "specific flag with dates and counts"}]}],
+  "escalation_match": "which failures match what seller complained about, or null"
+}
+
+Every failure title must name the person responsible, the specific action or inaction, and the date(s). If data for a section is missing, return empty array for failures and null for scores.`;
+
 // ── SETTINGS ─────────────────────────────────────────────────────
 function loadSettings() {
   const s = JSON.parse(localStorage.getItem('rca_v3_settings') || '{}');
   document.getElementById('cfg-field').value = s.field || 'seller_id';
   document.getElementById('cfg-criteria').value = s.salesCriteria || DEFAULT_SALES_CRITERIA;
   document.getElementById('cfg-ts-criteria').value = s.tsCriteria || DEFAULT_TS_CRITERIA;
+  document.getElementById('cfg-core-prompt').value = s.corePrompt || DEFAULT_CORE_PROMPT;
+  document.getElementById('cfg-additional').value = s.additionalPointers || '';
   for (let i = 1; i <= 13; i++) {
     const el = document.getElementById('q' + i);
     if (el) el.value = s['q' + i] || '';
@@ -506,7 +590,7 @@ function loadSettings() {
 }
 
 function saveSettings() {
-  const s = { field: document.getElementById('cfg-field').value.trim() || 'seller_id', salesCriteria: document.getElementById('cfg-criteria').value.trim(), tsCriteria: document.getElementById('cfg-ts-criteria').value.trim() };
+  const s = { field: document.getElementById('cfg-field').value.trim() || 'seller_id', salesCriteria: document.getElementById('cfg-criteria').value.trim(), tsCriteria: document.getElementById('cfg-ts-criteria').value.trim(), corePrompt: document.getElementById('cfg-core-prompt').value.trim(), additionalPointers: document.getElementById('cfg-additional').value.trim() };
   for (let i = 1; i <= 13; i++) {
     const el = document.getElementById('q' + i);
     if (el) s['q' + i] = el.value.trim();
@@ -800,58 +884,18 @@ async function runInvestigation() {
 
   const salesCriteria = s.salesCriteria || DEFAULT_SALES_CRITERIA;
   const tsCriteria = s.tsCriteria || DEFAULT_TS_CRITERIA;
+  const corePromptTemplate = s.corePrompt || DEFAULT_CORE_PROMPT;
 
-  const prompt = `You are an internal RCA tool for ShopDeck, an e-commerce enablement platform. Analyse the complete seller journey data below for seller ${sid} and return ONLY valid JSON — no markdown, no backticks, no explanation outside the JSON.
-
-SALES POLICY:
-${salesCriteria}
-
-TROUBLESHOOT QUALITY CRITERIA:
-${tsCriteria}
-
-TTS LIST CONTEXT: If seller appears in the TTS (Time To Serve) list, this means ShopDeck internally flagged them as likely to churn. Use this to explain timeline context — did support quality drop after TTS flagging? Was the seller ever informed or communicated with about their situation? This is NOT a seller failure, it is a ShopDeck process failure if not handled well.
-
-${escInstr}
-
-DATA:
-${dataText}
-
-Return exactly this JSON (no extra fields):
-{
-  "severity": "Critical|High|Medium|Low",
-  "summary": "3-4 sentence blunt summary of the full seller experience failure",
-  "total_failures": <number>,
-  "policy_violations": <number>,
-  "onboard_days": <number or null>,
-  "troubleshoots_done": <number>,
-  "tts_weeks": <number of weeks seller appeared on TTS list>,
-  "tts_context": "1-2 sentences on how TTS appearance relates to the timeline and whether it was communicated well",
-  "sales_score": <1-10>,
-  "sales_score_desc": "one line",
-  "onboard_score": <1-10>,
-  "onboard_score_desc": "one line",
-  "hits_score": <1-10>,
-  "hits_score_desc": "one line",
-  "snapshot": {
-    "demo_date": "date or null",
-    "recharge_date": "date or null",
-    "golive_date": "date or null",
-    "revenue_transfer_date": "date or null"
-  },
-  "pnl_weeks": [
-    {"week": "Week 1", "spend": "₹X", "orders": <n>, "p_percent": "X%", "on_tts": true/false}
-  ],
-  "timeline": [
-    {"label": "short label", "date": "date/week", "status": "ok|warn|fail", "points": [{"type": "good|warn|bad", "text": "what happened"}]}
-  ],
-  "sales_failures": [{"severity": "high|medium|low", "title": "specific failure", "meta": "source: call date, agent name"}],
-  "onboard_failures": [{"severity": "high|medium|low", "title": "specific failure", "meta": "source detail"}],
-  "hits_failures": [{"severity": "high|medium|low", "title": "specific failure", "meta": "source detail"}],
-  "agents": [{"name": "Name", "initials": "AB", "role": "SALES|ONBOARDING|KICKSTARTER", "interactions": <n>, "flags": [{"sev": "high|medium", "text": "flag"}]}],
-  "escalation_match": "which failures match what seller complained about, or null"
-}
-
-Be specific. Reference actual dates, call records, ticket numbers, and P&L figures from the data. If data for a section is missing, return empty array for failures and null for scores.`;
+  // Replace placeholders in core prompt template
+  const prompt = corePromptTemplate
+    .replace(/{{SELLER_ID}}/g, sid)
+    .replace(/{{SALES_CRITERIA}}/g, salesCriteria)
+    .replace(/{{TS_CRITERIA}}/g, tsCriteria)
+    .replace(/{{ESCALATION}}/g, escInstr)
+    .replace(/{{DATA}}/g, dataText)
+    .replace(/{{ADDITIONAL_POINTERS}}/g, (s.additionalPointers || '').trim()
+      ? 'ADDITIONAL ANALYSIS POINTERS (apply these on top of the rules above):\n' + (s.additionalPointers || '').trim()
+      : '');
 
   try {
     const msgContent = [{ type: 'text', text: prompt }];
