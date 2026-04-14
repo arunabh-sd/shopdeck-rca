@@ -576,6 +576,12 @@ Return exactly this JSON (no extra fields):
 Every failure title must name the person responsible, the specific action or inaction, and the date(s). If data for a section is missing, return empty array for failures and null for scores.`;
 
 // ── SETTINGS ─────────────────────────────────────────────────────
+const DEFAULT_QUESTION_IDS = {
+  q1: '9265', q2: '9268', q3: '9270', q4: '9269', q5: '9272',
+  q6: '9271', q7: '9274', q8: '9275', q9: '9276', q10: '',
+  q11: '9282', q12: '9277', q13: '9279'
+};
+
 function loadSettings() {
   const s = JSON.parse(localStorage.getItem('rca_v3_settings') || '{}');
   document.getElementById('cfg-field').value = s.field || 'seller_id';
@@ -585,7 +591,7 @@ function loadSettings() {
   document.getElementById('cfg-additional').value = s.additionalPointers || '';
   for (let i = 1; i <= 13; i++) {
     const el = document.getElementById('q' + i);
-    if (el) el.value = s['q' + i] || '';
+    if (el) el.value = s['q' + i] !== undefined ? s['q' + i] : (DEFAULT_QUESTION_IDS['q' + i] || '');
   }
 }
 
@@ -601,7 +607,15 @@ function saveSettings() {
   setTimeout(() => msg.style.display = 'none', 2000);
 }
 
-function getSettings() { return JSON.parse(localStorage.getItem('rca_v3_settings') || '{}'); }
+function getSettings() {
+  const s = JSON.parse(localStorage.getItem('rca_v3_settings') || '{}');
+  // Merge defaults for any question IDs not explicitly saved
+  for (let i = 1; i <= 13; i++) {
+    const key = 'q' + i;
+    if (!s[key] && DEFAULT_QUESTION_IDS[key]) s[key] = DEFAULT_QUESTION_IDS[key];
+  }
+  return s;
+}
 function toggleSettings() { document.getElementById('settings-panel').classList.toggle('open'); }
 
 // ── IMAGE / TAB ──────────────────────────────────────────────────
