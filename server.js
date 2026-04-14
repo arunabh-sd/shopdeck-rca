@@ -49,59 +49,79 @@ function makeRequest(targetUrl, options, body) {
   });
 }
 
+async function fetchMetabaseQuestion(questionId, sellerId, sellerField) {
+  const body = JSON.stringify({
+    parameters: [{
+      type: 'category',
+      target: ['variable', ['template-tag', sellerField || 'seller_id']],
+      value: sellerId
+    }]
+  });
+  console.log(`Fetching Metabase question ${questionId} for seller ${sellerId}`);
+  const result = await makeRequest(
+    `${METABASE_URL}/api/card/${questionId}/query`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': METABASE_API_KEY
+      }
+    },
+    body
+  );
+  console.log(`Metabase Q${questionId} response status: ${result.status}`);
+  return { status: result.status, body: result.body };
+}
+
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
 
-  // CORS preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, corsHeaders());
     res.end();
     return;
   }
 
-  // Health check
   if (parsed.pathname === '/health') {
     res.writeHead(200, corsHeaders());
     res.end(JSON.stringify({ ok: true, metabase: !!METABASE_URL, anthropic: !!ANTHROPIC_API_KEY }));
     return;
   }
 
-  // Metabase query
-  if (parsed.pathname === '/api/metabase' && req.method === 'POST') {
-    const { questionId, sellerId, sellerField } = parsed.query;
-    if (!questionId || !sellerId) {
-      res.writeHead(400, corsHeaders());
-      res.end(JSON.stringify({ error: 'questionId and sellerId required' }));
-      return;
-    }
-    try {
-      const body = JSON.stringify({
-        parameters: [{
-          type: 'category',
-          target: ['variable', ['template-tag', sellerField || 'seller_id']],
-          value: sellerId
-        }]
-      });
-      console.log(`Fetching Metabase question ${questionId} for seller ${sellerId}`);
-      const result = await makeRequest(
-        `${METABASE_URL}/api/card/${questionId}/query`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': METABASE_API_KEY
-          }
-        },
-        body
-      );
-      console.log(`Metabase response status: ${result.status}`);
-      res.writeHead(result.status, corsHeaders());
-      res.end(result.body);
-    } catch (e) {
-      console.error('Metabase error:', e.message);
-      res.writeHead(500, corsHeaders());
-      res.end(JSON.stringify({ error: e.message }));
-    }
+  // Fetch all 13 questions in parallel
+  if (parsed.pathname === '/api/fetch-all' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const { sellerId, sellerField, questionIds } = JSON.parse(body);
+        // questionIds is an object: { q1: "42", q2: "43", ... }
+        const results = {};
+        await Promise.all(
+          Object.entries(questionIds).map(async ([key, qId]) => {
+            if (!qId) { results[key] = null; return; }
+            try {
+              const r = await fetchMetabaseQuestion(qId, sellerId, sellerField);
+              if (r.status === 200 || r.status === 202) {
+                results[key] = JSON.parse(r.body);
+              } else {
+                console.error(`Q${key} error status ${r.status}:`, r.body.slice(0, 200));
+                results[key] = { error: `HTTP ${r.status}` };
+              }
+            } catch (e) {
+              console.error(`Q${key} fetch error:`, e.message);
+              results[key] = { error: e.message };
+            }
+          })
+        );
+        res.writeHead(200, corsHeaders());
+        res.end(JSON.stringify(results));
+      } catch (e) {
+        console.error('fetch-all error:', e.message);
+        res.writeHead(500, corsHeaders());
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
     return;
   }
 
@@ -125,7 +145,7 @@ const server = http.createServer(async (req, res) => {
           },
           JSON.stringify({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 2000,
+            max_tokens: 4000,
             messages: payload.messages
           })
         );
